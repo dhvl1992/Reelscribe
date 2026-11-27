@@ -35,9 +35,12 @@
   .result-head h2{font-size:var(--fs-lg); font-weight:500; margin:0}
   textarea.input{min-height:220px; padding:var(--s2); line-height:1.6; resize:vertical}
   .row{display:flex; gap:var(--s1); margin-top:var(--s2)}
-  .row .btn{flex:1}
+  .row .btn{flex:1; white-space:nowrap; padding:0 var(--s2)}
   .note{margin-top:var(--s2)}
   .hidden{display:none !important}
+  .msg{font-size:var(--fs-sm); color:var(--muted); margin-top:var(--s1); min-height:20px}
+  .msg a{color:var(--accent); text-decoration:none}
+  .msg button{border:0; background:none; color:var(--accent); padding:0; font:inherit; cursor:pointer}
 </style>
 </head>
 <body>
@@ -73,7 +76,12 @@
   <div class="card hidden" id="resultCard">
     <div class="result-head"><h2>Transcript</h2><span class="sub" id="resultMeta" style="margin:0"></span></div>
     <textarea class="input" id="result"></textarea>
-    <div class="row"><button class="btn btn-primary" id="copyBtn">Copy text</button></div>
+    <div class="row">
+      <button class="btn" id="cleanBtn">✨ Clean up</button>
+      <button class="btn" id="copyBtn">Copy text</button>
+    </div>
+    <button class="btn btn-primary wide" id="saveBtn">Save to MyBrain</button>
+    <div class="msg" id="actMsg"></div>
   </div>
 </div>
 
@@ -249,7 +257,99 @@ $("copyBtn").addEventListener("click", async () => {
   setTimeout(() => ($("copyBtn").textContent = "Copy text"), 1800);
 });
 
+// ---------- ✨ Clean up (optional): fixes wrong words + punctuation with your MyBrain Groq key ----------
+// The key is the one saved in MyBrain ⚙️ Settings (same website, same browser storage). Only the TEXT is sent to Groq.
+const GROQ_MODELS = ["openai/gpt-oss-120b", "openai/gpt-oss-20b"];
+const CLEAN_PROMPT = `You fix speech-to-text transcripts of short videos (reels) and voice notes.
+Fix misheard words, spelling, punctuation and capital letters. Split into short paragraphs where the topic changes.
+Keep the SAME language and script as the input (English stays English, Hindi stays Hindi, Hinglish stays Hinglish). Do NOT translate.
+Do NOT summarize, shorten, add ideas or add comments. Keep the speaker's meaning and words.
+Reply with the corrected transcript only.`;
+let beforeClean = null;
+
+async function cleanUp() {
+  const key = localStorage.getItem("key_groq") || "";
+  if (!key) return msg('Add your Groq key in <a href="/mybrain/#settings">MyBrain ⚙️ Settings</a> first.');
+  const text = $("result").value.trim();
+  if (!text) return;
+  const btn = $("cleanBtn");
+  btn.disabled = true; btn.textContent = "Cleaning…"; msg("");
+  try {
+    let out = "", lastErr = "";
+    for (const model of GROQ_MODELS) {
+      try { out = await askGroq(key, model, text); if (out) break; }
+      catch (e) { lastErr = e.message; }
+    }
+    if (!out) throw new Error(lastErr || "empty reply");
+    // Safety check: a clean-up should not drop or invent large parts
+    const ratio = out.split(/\s+/).length / text.split(/\s+/).length;
+    if (ratio < 0.6 || ratio > 1.6) throw new Error("the AI changed too much of the text");
+    beforeClean = text;
+    $("result").value = out;
+    $("resultMeta").textContent = `${out.split(/\s+/).length} words · cleaned`;
+    msg('Cleaned ✓ <button id="undoClean">Undo</button>');
+    $("undoClean").onclick = () => { $("result").value = beforeClean; beforeClean = null; msg("Back to the original text."); };
+  } catch (e) {
+    msg("Couldn't clean up: " + esc(e.message) + ". Your text is unchanged.");
+  }
+  btn.disabled = false; btn.textContent = "✨ Clean up";
+}
+async function askGroq(key, model, text) {
+  const body = { model, temperature: 0.2, max_tokens: Math.min(8000, Math.round(text.length / 2) + 500),
+    messages: [{ role: "system", content: CLEAN_PROMPT }, { role: "user", content: text }],
+    ...(/gpt-oss/.test(model) ? { reasoning_effort: "low" } : {}) };
+  const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+    method: "POST", headers: { "Content-Type": "application/json", Authorization: "Bearer " + key }, body: JSON.stringify(body) });
+  if (res.status === 401) throw new Error("the Groq key was rejected — check it in MyBrain Settings");
+  if (res.status === 429) throw new Error("Groq is busy (free limit) — try again in a minute");
+  if (!res.ok) throw new Error("Groq error " + res.status);
+  const json = await res.json();
+  return (json.choices?.[0]?.message?.content || "").trim();
+}
+$("cleanBtn").addEventListener("click", cleanUp);
+
+// ---------- Save to MyBrain: one tap → a Note in your Inbox, tagged "reel" ----------
+// Uses the MyBrain login already in this browser (same website) and MyBrain's own Supabase file.
+const MB_URL = "https://yncbwqhytcxkqrlonkkk.supabase.co";
+const MB_KEY = "sb_publishable_Sf-aeTSLVtF1aR2-KUSWMA_ecVQidxd";
+let mbClient = null;
+async function getMB() {
+  if (mbClient) return mbClient;
+  if (!window.supabase) await new Promise((ok, fail) => { const sc = document.createElement("script"); sc.src = "/mybrain/vendor/supabase.js"; sc.onload = ok; sc.onerror = fail; document.head.appendChild(sc); });
+  return (mbClient = window.supabase.createClient(MB_URL, MB_KEY));
+}
+async function saveToMyBrain() {
+  const text = $("result").value.trim();
+  if (!text) return;
+  const btn = $("saveBtn");
+  btn.disabled = true; btn.textContent = "Saving…"; msg("");
+  try {
+    const db = await getMB();
+    const { data: { session } } = await db.auth.getSession();
+    if (!session) { msg('<a href="/mybrain/">Log in to MyBrain</a> first, then come back and tap Save.'); btn.disabled = false; btn.textContent = "Save to MyBrain"; return; }
+    const words = text.replace(/\s+/g, " ").split(" ");
+    const title = words.slice(0, 8).join(" ").replace(/[.,;:!?]+$/, "") + (words.length > 8 ? "…" : "");
+    const row = { kind: "note", title: title.slice(0, 200), body: text + (file ? `\n\n— from ${file.name}` : ""), tags: ["reel"], due: null, priority: 2 };
+    // Put it in the Inbox list (if MyBrain lists exist)
+    const { data: lists } = await db.from("lists").select("id, name");
+    const inbox = (lists || []).find((l) => /^inbox$/i.test(l.name));
+    if (inbox) row.list_id = inbox.id;
+    const { data, error } = await db.from("items").insert(row).select("id").single();
+    if (error) throw error;
+    btn.textContent = "Saved ✓";
+    msg(`Saved to MyBrain Notes · <a href="/mybrain/#note/${encodeURIComponent(data.id)}">Open it ›</a>`);
+    setTimeout(() => { btn.disabled = false; btn.textContent = "Save again"; }, 2500);
+  } catch (e) {
+    console.error(e);
+    msg("Couldn't save: " + esc(e.message || String(e)) + ". Copy the text so you don't lose it.");
+    btn.disabled = false; btn.textContent = "Save to MyBrain";
+  }
+}
+$("saveBtn").addEventListener("click", saveToMyBrain);
+
 // ---------- helpers ----------
+function msg(html) { $("actMsg").innerHTML = html; }
+function esc(t) { const d = document.createElement("div"); d.textContent = String(t); return d.innerHTML; }
 function setStep(name, pct, detail) {
   pct = Math.max(0, Math.min(100, Number(pct) || 0));
   $(name + "Pc").textContent = Math.round(pct) + "%";
@@ -263,6 +363,8 @@ function resetProgress() {
   setStep("text", 0, "Waiting…"); $("textPc").textContent = "—";
   $("result").value = "";
   $("resultCard").classList.add("hidden");
+  msg(""); beforeClean = null;
+  $("saveBtn").disabled = false; $("saveBtn").textContent = "Save to MyBrain";
 }
 function showError(msg) { $("errorBox").textContent = msg; $("errorBox").classList.toggle("hidden", !msg); }
 // Plain-English errors with a next step
