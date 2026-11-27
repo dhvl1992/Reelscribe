@@ -245,10 +245,49 @@ export function splitAtSilence(audio, rate = SAMPLE_RATE, partS = PART_S, search
 }
 const tick = () => new Promise((r) => setTimeout(r, 0)); // let the screen update between parts
 
+// ---------- Repeat-glitch guard ----------
+// Small Whisper models sometimes get stuck repeating one phrase ("you're gonna watch this, you're gonna watch this, …").
+// Phones and computers do the maths slightly differently, so it can happen on one and not the other.
+// Rule: the same phrase (2–10 words) 3+ times in a row → keep one. A single word needs 5+ ("no no no" stays).
+export function removeLoops(text) {
+  let t = String(text), total = 0;
+  for (let pass = 0; pass < 5; pass++) {
+    const words = t.split(/\s+/).filter(Boolean), out = [];
+    const norm = (w) => w.toLowerCase().replace(/[^\p{L}\p{N}']/gu, "");
+    let found = 0;
+    for (let i = 0; i < words.length; ) {
+      let skip = false;
+      for (let n = 1; n <= 10; n++) { // shortest repeating phrase first
+        if (i + n * 3 > words.length) break;
+        const key = words.slice(i, i + n).map(norm).join(" ");
+        if (!key.replace(/ /g, "")) continue;
+        let k = 1;
+        while (i + (k + 1) * n <= words.length && words.slice(i + k * n, i + (k + 1) * n).map(norm).join(" ") === key) k++;
+        if (k >= (n === 1 ? 5 : 3)) { out.push(...words.slice(i, i + n)); i += k * n; found++; skip = true; break; }
+      }
+      if (!skip) out.push(words[i++]);
+    }
+    if (!found) break;
+    t = out.join(" "); total += found;
+  }
+  return { text: t.trim(), loops: total };
+}
+async function transcribePart(part) {
+  const first = (await transcriber(part, { task: "transcribe" }))?.text?.trim() || "";
+  const r = removeLoops(first);
+  if (!r.loops) return { text: first, fixed: false };
+  // Loop found: try this part once more, discouraging repeats; keep whichever is clean
+  try {
+    const again = (await transcriber(part, { task: "transcribe", repetition_penalty: 1.2 }))?.text?.trim() || "";
+    if (again && !removeLoops(again).loops) return { text: again, fixed: true };
+  } catch (e) { console.warn("retry failed", e); }
+  return { text: r.text, fixed: true };
+}
+
 async function transcribe(audio, seconds) {
   const parts = splitAtSilence(audio);
   const t0 = performance.now();
-  let text = "";
+  let text = "", fixed = 0;
   $("result").value = "";
   $("resultMeta").textContent = "";
   $("resultCard").classList.remove("hidden");
@@ -257,8 +296,8 @@ async function transcribe(audio, seconds) {
     setStep("text", (i / parts.length) * 100,
       `Part ${i + 1} of ${parts.length}` + (left != null ? ` · about ${clock(left)} left` : ` · ${clock(seconds)} of audio`));
     await tick();
-    const out = await transcriber(parts[i], { task: "transcribe" });
-    const piece = (out?.text || "").trim();
+    const { text: piece, fixed: wasFixed } = await transcribePart(parts[i]);
+    if (wasFixed) fixed++;
     if (piece) {
       text += (text ? " " : "") + piece;
       $("result").value = text; // text appears as each part finishes
@@ -266,7 +305,8 @@ async function transcribe(audio, seconds) {
     }
   }
   if (!text) { $("resultCard").classList.add("hidden"); throw new Error("NOSPEECH"); }
-  setStep("text", 100, `Done in ${clock((performance.now() - t0) / 1000)} · ${parts.length} part${parts.length > 1 ? "s" : ""} · ${device} ✓`);
+  setStep("text", 100, `Done in ${clock((performance.now() - t0) / 1000)} · ${parts.length} part${parts.length > 1 ? "s" : ""} · ${device} ✓`
+    + (fixed ? ` · fixed a repeat glitch` : ""));
 }
 
 // ---------- copy ----------
