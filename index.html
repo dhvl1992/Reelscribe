@@ -118,7 +118,7 @@ $("startBtn").addEventListener("click", async () => {
     await loadWhisper();
     await transcribe(audio, seconds);
     btn.textContent = "Transcribe another";
-    $("resultCard").scrollIntoView({ behavior: "smooth", block: "start" });
+    $("resultCard").scrollIntoView({ behavior: "smooth", block: "nearest" });
   } catch (e) {
     console.error(e);
     $("textBar").classList.remove("busy");
@@ -170,14 +170,12 @@ async function prepareAudio(buffer) {
   return { audio, seconds };
 }
 
-// ---------- 3. model: WebGPU if the phone has it, else CPU. Cached after the first download. ----------
+// ---------- 3. model: CPU. Cached after the first download. ----------
+// Why not WebGPU: this model is stored compressed ("q8"). On WebGPU it must be unpacked at every step,
+// which is often SLOWER than the CPU. The CPU path is also what the old ReelScribe effectively used.
 async function loadWhisper() {
   if (transcriber) { setStep("model", 100, `AI model ready · ${device} ✓`); return; }
   setStep("model", 1, "Checking saved model…");
-  if ("gpu" in navigator) {
-    try { device = "WebGPU"; transcriber = await makePipeline("webgpu"); return; }
-    catch (e) { console.warn("WebGPU failed, using CPU", e); transcriber = null; }
-  }
   device = "CPU";
   transcriber = await makePipeline("wasm");
 }
@@ -196,20 +194,50 @@ async function makePipeline(dev) {
   return pipe;
 }
 
-// ---------- 4. transcribe ----------
+// ---------- 4. transcribe in parts (≈30 s each) so you see real progress and text as it comes ----------
+// Whisper hears 30 s at a time anyway. We cut at the quietest moment near each 30 s mark, so words are not cut in half.
+const PART_S = 30, SEARCH_S = 4;
+export function splitAtSilence(audio, rate = SAMPLE_RATE, partS = PART_S, searchS = SEARCH_S) {
+  const parts = [], frame = Math.round(rate * 0.02); // 20 ms frames
+  let start = 0;
+  while (audio.length - start > partS * rate) {
+    const from = start + (partS - searchS) * rate, to = start + partS * rate;
+    let best = to, bestE = Infinity;
+    for (let f = from; f + frame <= to; f += frame) {
+      let e = 0;
+      for (let i = f; i < f + frame; i++) e += audio[i] * audio[i];
+      if (e < bestE) { bestE = e; best = f + (frame >> 1); }
+    }
+    parts.push(audio.subarray(start, best));
+    start = best;
+  }
+  if (audio.length - start > rate * 0.3) parts.push(audio.subarray(start)); // skip a tiny silent tail
+  return parts;
+}
+const tick = () => new Promise((r) => setTimeout(r, 0)); // let the screen update between parts
+
 async function transcribe(audio, seconds) {
-  $("textPc").textContent = "•••";
-  $("textDetail").textContent = `${clock(seconds)} of audio · ${device}`;
-  $("textBar").classList.add("busy");
+  const parts = splitAtSilence(audio);
   const t0 = performance.now();
-  const out = await transcriber(audio, { task: "transcribe", chunk_length_s: 30, stride_length_s: 5 });
-  $("textBar").classList.remove("busy");
-  const text = (out?.text || "").trim();
-  if (!text) throw new Error("NOSPEECH");
-  $("result").value = text;
-  $("resultMeta").textContent = `${text.split(/\s+/).length} words`;
+  let text = "";
+  $("result").value = "";
+  $("resultMeta").textContent = "";
   $("resultCard").classList.remove("hidden");
-  setStep("text", 100, `Done in ${clock((performance.now() - t0) / 1000)} · ${device} ✓`);
+  for (let i = 0; i < parts.length; i++) {
+    const done = performance.now() - t0, left = i ? (done / i) * (parts.length - i) / 1000 : null;
+    setStep("text", (i / parts.length) * 100,
+      `Part ${i + 1} of ${parts.length}` + (left != null ? ` · about ${clock(left)} left` : ` · ${clock(seconds)} of audio`));
+    await tick();
+    const out = await transcriber(parts[i], { task: "transcribe" });
+    const piece = (out?.text || "").trim();
+    if (piece) {
+      text += (text ? " " : "") + piece;
+      $("result").value = text; // text appears as each part finishes
+      $("resultMeta").textContent = `${text.split(/\s+/).length} words`;
+    }
+  }
+  if (!text) { $("resultCard").classList.add("hidden"); throw new Error("NOSPEECH"); }
+  setStep("text", 100, `Done in ${clock((performance.now() - t0) / 1000)} · ${parts.length} part${parts.length > 1 ? "s" : ""} · ${device} ✓`);
 }
 
 // ---------- copy ----------
