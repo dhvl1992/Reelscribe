@@ -1,0 +1,8 @@
+@huggingface/transformers 3.8.1
+onnxruntime-web 1.22.0-dev.20250409-89f8206ba4
+source: npm registry
+44484 sha384-7GJqH5vc83Yt7VHwrMXTM8bNCrt/e/8eCtok8zlB2u5dwqmhzSakzCkQWrfYGRN4 ./ort/ort-wasm-simd-threaded.jsep.mjs
+21596019 sha384-u/bDsx39c+wt0LbHmOCydxt4fyiig3118hQgOTfOvrfkgScM4hRo2IwTtlxyoI02 ./ort/ort-wasm-simd-threaded.jsep.wasm
+20856 sha384-xLEJm3cD/n4Gg0liIq5BLdCCP6LmdeJFePkGPamj/oRiZh/JW/8MsQjd5sZ1NqTs ./ort/ort-wasm-simd-threaded.mjs
+11133407 sha384-Z7U3DUpPF2Pn90oFPsg/hBEJ3KSaWdMsN5kjKA3BOrzrAktMBH8jnfDMlaoqhjuc ./ort/ort-wasm-simd-threaded.wasm
+469931 sha384-N05/rDJNkyNAqS6U76HJNuh/1pqSZDWa3h4Yo9UeHIHnAiUNCgs5oWcNT0X2zgPs ./transformers/transformers.web.min.js
