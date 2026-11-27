@@ -1,0 +1,50 @@
+# Copies the AI library (Transformers.js) and its speech engine (ONNX Runtime) from npm into vendor/,
+# so ReelScribe never loads code from an outside CDN (all dhvl1992 apps share one site + login).
+# Runs when this file changes, or by hand: Actions → Vendor Transformers → Run workflow.
+name: Vendor Transformers
+
+on:
+  workflow_dispatch:
+  push:
+    paths: [".github/workflows/vendor-transformers.yml"]
+
+permissions:
+  contents: write
+
+jobs:
+  vendor:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download from npm and copy browser files
+        run: |
+          set -e
+          mkdir -p /tmp/pkg && cd /tmp/pkg
+          npm init -y >/dev/null
+          npm install --no-audit --no-fund @huggingface/transformers@3.8.1 >/dev/null
+          cd "$GITHUB_WORKSPACE"
+          rm -rf vendor && mkdir -p vendor/transformers vendor/ort
+          T=/tmp/pkg/node_modules/@huggingface/transformers
+          O=/tmp/pkg/node_modules/onnxruntime-web
+          echo "--- transformers dist:"; ls -la $T/dist
+          echo "--- onnxruntime-web dist:"; ls -la $O/dist | head -80
+          cp $T/dist/*.js vendor/transformers/ 2>/dev/null || true
+          cp $T/dist/*.mjs vendor/transformers/ 2>/dev/null || true
+          cp $O/dist/ort-wasm*.wasm $O/dist/ort-wasm*.mjs vendor/ort/ 2>/dev/null || true
+          {
+            echo "@huggingface/transformers $(node -p "require('$T/package.json').version")"
+            echo "onnxruntime-web $(node -p "require('$O/package.json').version")"
+            echo "transformers browser entry: $(node -p "const p=require('$T/package.json'); JSON.stringify({browser:p.browser, module:p.module, exports:p.exports && p.exports['.']})")"
+            echo "source: npm registry"
+            cd vendor && find . -type f | sort | while read f; do echo "$(stat -c %s "$f") $(openssl dgst -sha384 -binary "$f" | openssl base64 -A) $f"; done
+          } > vendor/VERSIONS.txt
+          cat vendor/VERSIONS.txt
+          du -sh vendor
+      - name: Commit if changed
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898699+github-actions[bot]@users.noreply.github.com"
+          git add vendor
+          git diff --cached --quiet && { echo "No change"; exit 0; }
+          git commit -m "Vendor Transformers.js 3.8.1 + ONNX Runtime wasm from npm"
+          git push
