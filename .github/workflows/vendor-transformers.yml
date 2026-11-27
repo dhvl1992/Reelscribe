@@ -28,16 +28,17 @@ jobs:
           O=/tmp/pkg/node_modules/onnxruntime-web
           echo "--- transformers dist:"; ls -la $T/dist
           echo "--- onnxruntime-web dist:"; ls -la $O/dist | head -80
-          cp $T/dist/*.js vendor/transformers/ 2>/dev/null || true
-          cp $T/dist/*.mjs vendor/transformers/ 2>/dev/null || true
-          cp $O/dist/ort-wasm*.wasm $O/dist/ort-wasm*.mjs vendor/ort/ 2>/dev/null || true
-          {
+          # Only what the browser needs: the web build + the two speech engines (CPU wasm, WebGPU jsep)
+          cp $T/dist/transformers.web.min.js vendor/transformers/
+          cp $O/dist/ort-wasm-simd-threaded.wasm $O/dist/ort-wasm-simd-threaded.mjs vendor/ort/
+          cp $O/dist/ort-wasm-simd-threaded.jsep.wasm $O/dist/ort-wasm-simd-threaded.jsep.mjs vendor/ort/
+          (
             echo "@huggingface/transformers $(node -p "require('$T/package.json').version")"
             echo "onnxruntime-web $(node -p "require('$O/package.json').version")"
-            echo "transformers browser entry: $(node -p "const p=require('$T/package.json'); JSON.stringify({browser:p.browser, module:p.module, exports:p.exports && p.exports['.']})")"
             echo "source: npm registry"
-            cd vendor && find . -type f | sort | while read f; do echo "$(stat -c %s "$f") $(openssl dgst -sha384 -binary "$f" | openssl base64 -A) $f"; done
-          } > vendor/VERSIONS.txt
+            cd vendor && find . -type f ! -name VERSIONS.txt | sort | while read f; do echo "$(stat -c %s "$f") sha384-$(openssl dgst -sha384 -binary "$f" | openssl base64 -A) $f"; done
+          ) > /tmp/VERSIONS.txt
+          mv /tmp/VERSIONS.txt vendor/VERSIONS.txt
           cat vendor/VERSIONS.txt
           du -sh vendor
       - name: Commit if changed
