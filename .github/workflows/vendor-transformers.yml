@@ -21,7 +21,7 @@ jobs:
           set -e
           mkdir -p /tmp/pkg && cd /tmp/pkg
           npm init -y >/dev/null
-          npm install --no-audit --no-fund @huggingface/transformers@3.8.1 >/dev/null
+          npm install --ignore-scripts --no-audit --no-fund @huggingface/transformers@3.8.1 >/dev/null  # files only; skip server-side GPU add-on downloads
           cd "$GITHUB_WORKSPACE"
           rm -rf vendor && mkdir -p vendor/transformers vendor/ort
           T=/tmp/pkg/node_modules/@huggingface/transformers
