@@ -264,8 +264,23 @@ const CLEAN_PROMPT = `You fix speech-to-text transcripts of short videos (reels)
 Fix misheard words, spelling, punctuation and capital letters. Split into short paragraphs where the topic changes.
 Keep the SAME language and script as the input (English stays English, Hindi stays Hindi, Hinglish stays Hinglish). Do NOT translate.
 Do NOT summarize, shorten, add ideas or add comments. Keep the speaker's meaning and words.
+PLAIN TEXT ONLY: no Markdown, no asterisks (*), no bold or italics, no headings (#), no bullet points, no titles.
 Reply with the corrected transcript only.`;
 let beforeClean = null;
+
+// Safety net: remove Markdown the AI may still add (MyBrain shows plain text, so ** would show as stars)
+export function plainText(t) {
+  return String(t)
+    .replace(/\*\*(.+?)\*\*/gs, "$1")          // **bold**
+    .replace(/__(.+?)__/gs, "$1")                  // __bold__
+    .replace(/(^|[\s(])\*(?!\s)([^*\n]+?)\*(?=[\s.,;:!?)]|$)/gm, "$1$2") // *italic*
+    .replace(/(^|[\s(])_(?!\s)([^_\n]+?)_(?=[\s.,;:!?)]|$)/gm, "$1$2")     // _italic_
+    .replace(/^#{1,6}\s+/gm, "")                  // # headings
+    .replace(/^[ \t]*[*•-][ \t]+/gm, "")         // bullet markers at line start (keep blank lines)
+    .replace(/\*{2,}/g, "")                       // stray ** left over
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
 
 async function cleanUp() {
   const key = localStorage.getItem("key_groq") || "";
@@ -281,6 +296,7 @@ async function cleanUp() {
       catch (e) { lastErr = e.message; }
     }
     if (!out) throw new Error(lastErr || "empty reply");
+    out = plainText(out);
     // Safety check: a clean-up should not drop or invent large parts
     const ratio = out.split(/\s+/).length / text.split(/\s+/).length;
     if (ratio < 0.6 || ratio > 1.6) throw new Error("the AI changed too much of the text");
