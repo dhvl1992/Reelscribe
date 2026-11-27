@@ -23,15 +23,18 @@ jobs:
           npm init -y >/dev/null
           npm install --ignore-scripts --no-audit --no-fund @huggingface/transformers@3.8.1 >/dev/null  # files only; skip server-side GPU add-on downloads
           cd "$GITHUB_WORKSPACE"
-          rm -rf vendor && mkdir -p vendor/transformers vendor/ort
+          rm -rf vendor && mkdir -p vendor/transformers
           T=/tmp/pkg/node_modules/@huggingface/transformers
           O=/tmp/pkg/node_modules/onnxruntime-web
           echo "--- transformers dist:"; ls -la $T/dist
           echo "--- onnxruntime-web dist:"; ls -la $O/dist | head -80
-          # Only what the browser needs: the web build + the two speech engines (CPU wasm, WebGPU jsep)
-          cp $T/dist/transformers.web.min.js vendor/transformers/
-          cp $O/dist/ort-wasm-simd-threaded.wasm $O/dist/ort-wasm-simd-threaded.mjs vendor/ort/
-          cp $O/dist/ort-wasm-simd-threaded.jsep.wasm $O/dist/ort-wasm-simd-threaded.jsep.mjs vendor/ort/
+          # Only what the browser needs: the self-contained build (same file the CDN served)
+          # + its speech engine (one file pair does both CPU and WebGPU)
+          rm -rf vendor/ort
+          cp $T/dist/transformers.min.js vendor/transformers/
+          cp $T/dist/ort-wasm-simd-threaded.jsep.wasm $T/dist/ort-wasm-simd-threaded.jsep.mjs vendor/transformers/
+          echo "--- outside imports in transformers.min.js (should be none):"
+          grep -o '^import[^;]*;' vendor/transformers/transformers.min.js || echo "none"
           (
             echo "@huggingface/transformers $(node -p "require('$T/package.json').version")"
             echo "onnxruntime-web $(node -p "require('$O/package.json').version")"
