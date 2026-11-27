@@ -100,8 +100,9 @@ const $ = (id) => document.getElementById(id);
 let file = null, transcriber = null, device = "";
 
 // ---------- 1. pick ----------
-$("fileIn").addEventListener("change", () => {
-  file = $("fileIn").files[0];
+$("fileIn").addEventListener("change", () => selectFile($("fileIn").files[0]));
+function selectFile(f) {
+  file = f;
   if (!file) return;
   $("fileName").textContent = file.name;
   $("fileSize").textContent = mb(file.size);
@@ -110,7 +111,27 @@ $("fileIn").addEventListener("change", () => {
   $("startBtn").textContent = "Transcribe";
   showError("");
   resetProgress();
-});
+}
+
+// ---------- Shared from Gallery / WhatsApp ("Share → dhvl1992") ----------
+// The home page's service worker (/sw.js) received the file and kept it in browser storage; pick it up here.
+async function pickUpShared() {
+  const q = new URLSearchParams(location.search).get("shared");
+  if (q === null) return;
+  history.replaceState(null, "", location.pathname); // clean address, so a reload doesn't repeat this
+  if (q !== "1" || !("caches" in window)) return showError("Couldn't receive the shared file. Open it with “Tap to choose” instead.");
+  try {
+    const cache = await caches.open("share-inbox");
+    const res = await cache.match("/shared-file");
+    if (!res) return showError("The shared file was not found. Share it again, or tap to choose it.");
+    const blob = await res.blob();
+    const name = decodeURIComponent(res.headers.get("X-File-Name") || "shared");
+    await cache.delete("/shared-file"); // don't keep a copy around
+    selectFile(new File([blob], name, { type: blob.type || res.headers.get("Content-Type") || "" }));
+    $("startBtn").click(); // start right away
+  } catch (e) { console.error(e); showError("Couldn't receive the shared file. Tap to choose it instead."); }
+}
+pickUpShared();
 
 // ---------- main ----------
 $("startBtn").addEventListener("click", async () => {
